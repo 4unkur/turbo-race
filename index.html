@@ -128,6 +128,23 @@ h1 .a{color:var(--gold);display:block} h1 .b{color:var(--hot);display:block;marg
 .got{display:flex;align-items:center;gap:8px;font-family:var(--display);font-size:clamp(22px,6vmin,36px)}
 .got svg{width:1.2em;height:1.2em}
 
+.diff{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.diff button{--c:var(--gas-d);display:flex;flex-direction:column;align-items:center;gap:2px;min-width:clamp(92px,22vmin,130px);
+  font-family:var(--display);font-size:clamp(14px,3.6vmin,20px);line-height:1;padding:8px 12px 9px;border:3px solid var(--ink);border-radius:16px;
+  background:var(--paper);color:var(--ink);box-shadow:0 5px 0 var(--ink);touch-action:manipulation;transition:transform .08s,box-shadow .08s}
+.diff button .lv{font-size:1.05em;letter-spacing:.08em;color:var(--c)}
+.diff button[data-d="medium"]{--c:#ff9f1c} .diff button[data-d="hard"]{--c:var(--brake)}
+.diff button[aria-pressed="true"]{background:var(--c);color:#fff;text-shadow:0 2px 0 var(--ink);transform:translateY(3px) scale(1.06);box-shadow:0 2px 0 var(--ink)}
+.diff button[aria-pressed="true"] .lv{color:var(--gold)}
+@media (max-height:440px){
+  h1{font-size:46px;-webkit-text-stroke-width:5px;text-shadow:0 6px 0 var(--ink)}
+  #menu{gap:10px}
+  .big{font-size:26px}
+  .tip{padding:6px 12px;font-size:13px}
+  .tip svg{width:44px;height:30px}
+  .diff button{min-width:84px;font-size:13px;padding:6px 10px 7px}
+  .card .diff{gap:6px}
+}
 @media (max-height:440px){
   .card{gap:6px;padding:12px 28px 16px}
   .card h2{font-size:38px}
@@ -186,6 +203,7 @@ h1 .a{color:var(--gold);display:block} h1 .b{color:var(--hot);display:block;marg
 
 <div id="menu" class="screen">
   <h1><span class="a">ТУРБО</span><span class="b">ГОНКА</span></h1>
+  <div class="diff" id="diffMenu" role="group" aria-label="Сложность"></div>
   <button id="startBtn" class="big">ПОЕХАЛИ!</button>
   <div class="chip tip">
     <svg viewBox="0 0 58 40" aria-hidden="true"><rect x="3" y="5" width="52" height="30" rx="7" fill="#fff" stroke="#1b1f3b" stroke-width="3.5"/><rect x="10" y="11" width="38" height="18" rx="3" fill="#58c6ff"/><circle cx="29" cy="20" r="4" fill="#ff2b4a"/></svg>
@@ -200,6 +218,7 @@ h1 .a{color:var(--gold);display:block} h1 .b{color:var(--hot);display:block;marg
     <div class="medal" id="medal">1</div>
     <p class="sub" id="finSub">Ты приехал первым!</p>
     <div class="got"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1.8l3 6.6 7.2.8-5.4 4.9 1.5 7.1L12 17.6l-6.3 3.6 1.5-7.1L1.8 9.2 9 8.4z" fill="#ffd23f" stroke="#1b1f3b" stroke-width="2" stroke-linejoin="round"/></svg><span id="finStars">0</span></div>
+    <div class="diff" id="diffFin" role="group" aria-label="Сложность"></div>
     <button id="againBtn" class="big">ЕЩЁ РАЗ!</button>
   </div>
 </div>
@@ -244,8 +263,18 @@ const PLAYER_Z = CAM_H * CAM_D;
 const MAX = SEG * 60;               // top speed, world units / s
 const NITRO_MAX = MAX * 1.45;
 const ACCEL = MAX / 3.5, BRAKE = -MAX / 1.4, DECEL = -MAX / 7;
-const OFF_DECEL = -MAX / 2.2, OFF_LIMIT = MAX / 3;
-const CENTRIFUGAL = 0.2;
+// difficulty: opponent pace, catch-up rules, how hard the road pushes back
+const DIFFS = {
+  easy:   { name: 'ЛЁГКИЙ',  lv: '★',   speeds: [0.9, 0.85, 0.8, 0.76, 0.72], lead: 0.8,  lagMul: 1.15, lagCap: 0.92,
+            cf: 0.2,  assist: 0.35, off: MAX / 3,   offDecel: -MAX / 2.2, bump: 0.75 },
+  medium: { name: 'СРЕДНИЙ', lv: '★★',  speeds: [0.98, 0.95, 0.91, 0.87, 0.83], lead: 0.93, lagMul: 1.1, lagCap: 0.98,
+            cf: 0.27, assist: 0.15, off: MAX / 3.5, offDecel: -MAX / 1.8, bump: 0.6 },
+  hard:   { name: 'ТЯЖЁЛЫЙ', lv: '★★★', speeds: [1.03, 1.0, 0.97, 0.94, 0.9], lead: 1,    lagMul: 1.06, lagCap: 1.05,
+            cf: 0.33, assist: 0,    off: MAX / 4,   offDecel: -MAX / 1.5, bump: 0.5 },
+};
+let diffKey = 'easy';
+try { const d = localStorage.getItem('turbo-diff'); if (DIFFS[d]) diffKey = d; } catch (_) {}
+let diff = DIFFS[diffKey];
 const CAR_W = 0.3;                  // car width in road half-width units
 const START_SEG = 22;
 
@@ -563,13 +592,12 @@ const clouds = Array.from({ length: 6 }, (_, i) => ({ x: i / 6 + rand(0, 0.1), y
 const bg = { skyTop: ZONES[0].bg.skyTop.slice(), skyBot: ZONES[0].bg.skyBot.slice(), far: ZONES[0].bg.far.slice(), near: ZONES[0].bg.near.slice(), peak: 0 };
 const input = { gas: false, brake: false, kGas: false, kBrake: false, left: false, right: false, touch: null };
 
-const BASE_SPEEDS = [0.9, 0.85, 0.8, 0.76, 0.72];
 function resetCars() {
   segments.forEach(s => { s.cars.length = 0; });
   cars = S.cars.map((spr, i) => {
     const z = PLAYER_Z + SEG * (16 - i * 3);
     const lane = i % 2 ? 0.5 : -0.5;
-    const car = { spr, z, total: z, offset: lane, lane, speed: 0, base: MAX * BASE_SPEEDS[i], phase: rand(0, 6), spin: 0, finished: false, order: 0, idx: i };
+    const car = { spr, z, total: z, offset: lane, lane, speed: 0, base: MAX * diff.speeds[i], phase: rand(0, 6), spin: 0, finished: false, order: 0, idx: i };
     segments[Math.floor(z / SEG) % N].cars.push(car);
     return car;
   });
@@ -737,6 +765,22 @@ $('startBtn').addEventListener('click', async () => {
   if (perm && (await perm) === 'granted') window.addEventListener('deviceorientation', onOrient);
   newRace();
 });
+function buildDiff(box) {
+  box.innerHTML = '';
+  for (const [k, d] of Object.entries(DIFFS)) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.d = k; b.setAttribute('aria-pressed', String(k === diffKey));
+    b.innerHTML = `<span class="lv">${d.lv}</span>${d.name}`;
+    b.addEventListener('click', () => {
+      diffKey = k; diff = DIFFS[k];
+      try { localStorage.setItem('turbo-diff', k); } catch (_) {}
+      document.querySelectorAll('.diff button').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.d === k)));
+      Snd.init(); Snd.tone(440 + Object.keys(DIFFS).indexOf(k) * 220, 0.1, 'square', 0.1);
+    });
+    box.appendChild(b);
+  }
+}
+buildDiff($('diffMenu')); buildDiff($('diffFin'));
 $('againBtn').addEventListener('click', () => { Snd.init(); goFullscreen(); newRace(); });
 
 function toast(text, color) {
@@ -839,8 +883,8 @@ function updateCars(dt) {
       target = car.base;
       const gap = car.total - player.total;
       if (!car.finished && !player.finished) {
-        if (gap > 30 * SEG) target *= 0.8;
-        else if (gap < -40 * SEG) target = Math.min(target * 1.15, MAX * 0.92);
+        if (gap > 30 * SEG) target *= diff.lead;
+        else if (gap < -40 * SEG) target = Math.min(target * diff.lagMul, MAX * diff.lagCap);
       }
       const behind = player.total - car.total;
       if (behind > 0 && behind < 2.5 * SEG && overlap(playerX, CAR_W, car.offset, CAR_W, 1.3)) {
@@ -887,8 +931,8 @@ function update(dt) {
     if (state === 'race' || state === 'finish') {
       const dx = dt * 2.2 * Math.min(sp, 1.1);
       playerX += steerSm * dx;
-      playerX -= dx * Math.min(sp, 1) * pSeg.curve * CENTRIFUGAL;
-      if (Math.abs(playerX) > 0.95 && Math.abs(steerSm) < 0.25) playerX -= Math.sign(playerX) * dt * 0.35 * Math.min(1, sp + 0.2);
+      playerX -= dx * Math.min(sp, 1) * pSeg.curve * diff.cf;
+      if (Math.abs(playerX) > 0.95 && Math.abs(steerSm) < 0.25) playerX -= Math.sign(playerX) * dt * diff.assist * Math.min(1, sp + 0.2);
       playerX = clamp(playerX, -2.4, 2.4);
 
       const gas = state === 'race' && (input.gas || input.kGas);
@@ -898,7 +942,7 @@ function update(dt) {
       else if (gas) speed = speed < MAX ? Math.min(MAX, speed + ACCEL * dt) : Math.max(MAX, speed - MAX * 0.4 * dt);
       else speed = Math.max(0, speed + DECEL * dt * (speed > MAX ? 2.5 : 1));
       offroad = Math.abs(playerX) > 1.05;
-      if (offroad && speed > OFF_LIMIT) speed = Math.max(OFF_LIMIT, speed + OFF_DECEL * dt);
+      if (offroad && speed > diff.off) speed = Math.max(diff.off, speed + diff.offDecel * dt);
       if (offroad && speed > MAX * 0.15 && Math.random() < 0.5) {
         const cols = ZONES[pSeg.zone].grass;
         burst(W / 2 + rand(-1, 1) * W * 0.12, H - H * 0.04, 1, cols, 'dot', 0.6);
@@ -918,7 +962,7 @@ function update(dt) {
           car.lane = clamp(car.lane + side * 0.7, -0.85, 0.85); car.offset += side * 0.3;
           car.spin = 1; car.speed *= 0.5; shake = 7; Snd.bump(); toast('БАХ!', '#ffd23f');
         } else {
-          speed = car.speed * 0.75; playerX += playerX >= car.offset ? 0.12 : -0.12;
+          speed = car.speed * diff.bump; playerX += playerX >= car.offset ? 0.12 : -0.12;
           car.spin = 0.5; shake = 6; Snd.bump();
         }
         break;
@@ -965,7 +1009,8 @@ function update(dt) {
   for (const key of ['skyTop', 'skyBot', 'far', 'near']) bg[key] = mixRgb(bg[key], tz[key], k);
   bg.peak = lerp(bg.peak, tz.peak, k);
 
-  Snd.engine(Math.min(speed / MAX, 1.4) + (state === 'countdown' && (input.gas || input.kGas) ? 0.5 : 0), state !== 'menu');
+  Snd.engine(Math.min(speed / MAX, 1.4) + (state === 'countdown' && (input.gas || input.kGas) ? 0.5 : 0),
+    state === 'countdown' || state === 'race' || (state === 'finish' && $('finish').hidden));
   if (state !== 'menu') updateHud();
 }
 
